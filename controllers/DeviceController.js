@@ -1,26 +1,71 @@
-// Hàm xử lý khi ESP32 gửi dữ liệu lên
-const nhanDuLieuESP = (req, res) => {
-    // 1. Bóc tách dữ liệu từ gói JSON mà ESP32 gửi
-    const { mac_address, khoi_luong } = req.body;
+const NhatKyTruyen = require('../models/NhatKyTruyen'); // Trỏ đúng tên file Model của bạn
+const CanhBao = require('../models/CanhBao'); 
+const { v4: uuidv4 } = require('uuid'); // Thư viện tạo mã ID ngẫu nhiên giống trong DB của bạn
 
-    // 2. In ra màn hình đen (Terminal) để bạn (người làm Backend) nhìn thấy
-    console.log(`[CẢNH BÁO] Máy ${mac_address} vừa gửi báo cáo: Còn ${khoi_luong} ml`);
+exports.nhanDuLieuESP = async (req, res) => {
+    try {
+        // 1. Hứng dữ liệu từ mạch ESP32 gửi lên
+        const { session_id, current_drop_rate, current_weight } = req.body;
 
-    // (Tương lai: Chỗ này chúng ta sẽ gọi Models để lưu vào Database)
-    let trang_thai = "Bình thường";
-    if (khoi_luong < 50) {
-        trang_thai = "Cấp bách - Sắp hết dịch!";
-    }
+        // --- KHỐI LOGIC 1: TÍNH TOÁN Y SINH ---
+        const TRONG_LUONG_VO_CHAI = 30; // gram
+        const SO_GIOT_TREN_ML = 20; // 20 giọt = 1 ml
 
-    // 3. Trả kết quả về cho ESP32 (để mạch cứng biết là đã gửi thành công)
-    res.status(200).json({
-        tin_nhan: "Backend đã nhận được số liệu",
-        thong_tin_nhan_duoc: {
-            mac: mac_address,
-            the_tich: khoi_luong,
-            canh_bao: trang_thai
+        // Tính thể tích còn lại (ml)
+        let the_tich_con_lai = current_weight - TRONG_LUONG_VO_CHAI;
+        if (the_tich_con_lai < 0) the_tich_con_lai = 0; // Chống lỗi số âm khi cân bị sai lệch
+
+        // Tính thời gian còn lại (phút)
+        let thoi_gian_con_lai = 0;
+        if (current_drop_rate > 0) {
+            let toc_do_ml_phut = current_drop_rate / SO_GIOT_TREN_ML;
+            thoi_gian_con_lai = Math.round(the_tich_con_lai / toc_do_ml_phut);
         }
-    });
-};
 
-module.exports = { nhanDuLieuESP };
+        // --- KHỐI LOGIC 2: LƯU NHẬT KÝ VÀO DATABASE ---
+        await NhatKyTruyen.create({
+            id: uuidv4(), // Tự động đẻ ra cái chuỗi dài ngoằng như trong DB của bạn
+            session_id: session_id,
+            current_drop_rate: current_drop_rate,
+            current_weight: current_weight,
+            remaining_time: thoi_gian_con_lai,
+            recorded_at: new Date() // Lấy giờ hệ thống hiện tại
+        });
+
+        // --- KHỐI LOGIC 3: KIỂM TRA AN TOÀN & BÁO ĐỘNG ---
+        
+        // Kịch bản A: Tốc độ truyền quá nhanh (Ví dụ > 60 giọt/phút)
+        if (current_drop_rate > 60) {
+            await CanhBao.create({
+                id: uuidv4(),
+                session_id: session_id,
+                alert_type: 'drop_rate_high',
+                message: `NGUY HIỂM: Tốc độ quá nhanh (${current_drop_rate} giọt/p)!`,
+                is_read: false,
+                triggered_at: new Date()
+            });
+        } 
+        // Kịch bản B: Sắp hết dịch (Ví dụ còn dưới 20ml)
+        else if (the_tich_con_lai > 0 && the_tich_con_lai < 20) {
+            await CanhBao.create({
+                id: uuidv4(),
+                session_id: session_id,
+                alert_type: 'weight_low',
+                message: `CẢNH BÁO: Dịch truyền sắp hết (còn ${the_tich_con_lai} ml)!`,
+                is_read: false,
+                triggered_at: new Date()
+            });
+        }
+
+        // 4. Trả lời lại cho ESP32 biết là đã nhận thành công
+        res.status(200).json({ 
+            status: "success", 
+            message: "Đã lưu dữ liệu và tính toán thành công!",
+            calculated_time: thoi_gian_con_lai 
+        });
+
+    } catch (error) {
+        console.error("Lỗi khi xử lý dữ liệu ESP32:", error);
+        res.status(500).json({ message: "Lỗi Server Node.js" });
+    }
+};
