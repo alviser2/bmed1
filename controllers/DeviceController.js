@@ -1,5 +1,5 @@
-const NhatKyTruyen = require('../models/NhatKyTruyen'); // Trỏ đúng tên file Model của bạn
-const CanhBao = require('../models/CanhBao'); 
+const NhatKyTruyen = require('../models/InfusionMetricsLog'); // Trỏ đúng tên file Model của bạn
+const CanhBao = require('../models/InfusionAlert'); 
 const { v4: uuidv4 } = require('uuid'); // Thư viện tạo mã ID ngẫu nhiên giống trong DB của bạn
 
 exports.nhanDuLieuESP = async (req, res) => {
@@ -23,7 +23,7 @@ exports.nhanDuLieuESP = async (req, res) => {
         }
 
         // --- KHỐI LOGIC 2: LƯU NHẬT KÝ VÀO DATABASE ---
-        await NhatKyTruyen.create({
+        await InfusionMetricsLog.create({
             id: uuidv4(), // Tự động đẻ ra cái chuỗi dài ngoằng như trong DB của bạn
             session_id: session_id,
             current_drop_rate: current_drop_rate,
@@ -36,7 +36,7 @@ exports.nhanDuLieuESP = async (req, res) => {
         
         // Kịch bản A: Tốc độ truyền quá nhanh (Ví dụ > 60 giọt/phút)
         if (current_drop_rate > 60) {
-            await CanhBao.create({
+            await InfusionAlert.create({
                 id: uuidv4(),
                 session_id: session_id,
                 alert_type: 'drop_rate_high',
@@ -47,7 +47,7 @@ exports.nhanDuLieuESP = async (req, res) => {
         } 
         // Kịch bản B: Sắp hết dịch (Ví dụ còn dưới 20ml)
         else if (the_tich_con_lai > 0 && the_tich_con_lai < 20) {
-            await CanhBao.create({
+            await InfusionAlert.create({
                 id: uuidv4(),
                 session_id: session_id,
                 alert_type: 'weight_low',
@@ -76,7 +76,7 @@ exports.nhanDuLieuESP = async (req, res) => {
 exports.xemDanhSachTruyen = async (req, res) => {
     try {
         // Tìm 20 dòng nhật ký truyền mới nhất trong Database
-        const danhSach = await NhatKyTruyen.findAll({
+        const danhSach = await InfusionMetricsLog.findAll({
             order: [['recorded_at', 'DESC']], // Sắp xếp thời gian giảm dần (mới nhất lên đầu)
             limit: 20 
         });
