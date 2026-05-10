@@ -69,3 +69,22 @@ exports.nhanDuLieuESP = async (req, res) => {
         res.status(500).json({ message: "Lỗi Server Node.js" });
     }
 };
+
+
+
+// Hàm mới: Dành cho Web/React kéo dữ liệu về XEM
+exports.xemDanhSachTruyen = async (req, res) => {
+    try {
+        // Tìm 20 dòng nhật ký truyền mới nhất trong Database
+        const danhSach = await NhatKyTruyen.findAll({
+            order: [['recorded_at', 'DESC']], // Sắp xếp thời gian giảm dần (mới nhất lên đầu)
+            limit: 20 
+        });
+        
+        // Trả về cho trình duyệt/React dưới dạng JSON
+        res.status(200).json(danhSach);
+    } catch (error) {
+        console.error("Lỗi khi lấy dữ liệu:", error);
+        res.status(500).json({ message: "Lỗi Server" });
+    }
+};
