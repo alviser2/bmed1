@@ -25,6 +25,10 @@ function groupByPatient(sessions) {
 
 // ── Chi tiết bệnh nhân ─────────────────────────────────────────────────────
 function PatientDetail({ session, onBack }) {
+  console.log("=== KIỂM TRA SESSION ID ===");
+  console.log("Session ID đang mở trên Web:", session.id);
+  console.log("===========================");
+  
   const [chart, setChart]   = useState([])
   const [live, setLive]     = useState({
     dropRate:        session.dropRate        ?? 0,

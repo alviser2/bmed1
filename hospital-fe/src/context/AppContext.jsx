@@ -7,30 +7,36 @@ const AppContext = createContext(null)
 
 export function AppProvider({ children }) {
   const [sessions, setSessions]         = useState([])
-  const [notifications, setNotifications] = useState([]) // manual error reports
+  const [notifications, setNotifications] = useState([])
   const [devices, setDevices]           = useState([])
   const [autoRefresh, setAutoRefresh]   = useState(true)
-  const [warnThreshold, setWarnThreshold] = useState(15) // minutes
-  const [rateThreshold, setRateThreshold] = useState(20) // %
+  
+  const [warnThreshold, setWarnThreshold] = useState(20) // 20ml
+  const [rateThreshold, setRateThreshold] = useState(15) // 15%
+
   const [loading, setLoading]           = useState(true)
   const [error, setError]               = useState(null)
 
   // ── Derive status for a session ──────────────────────────────────
   const getStatus = useCallback((s) => {
     if (!s.deviceId) return 'gray'
-    if (s.manualError) return 'red'
-    const remaining = s.volumeRemaining ?? s.volumeInitial
-    const rate = s.dropRate ?? 60
-    const minutesLeft = rate > 0 ? (remaining / rate) * 60 : 999
-    if (minutesLeft < warnThreshold) return 'orange'
+
+    const currentRate = parseFloat(s.dropRate || 0)
+    const targetRate = parseFloat(s.prescribedDropRate || 0)
+    const isRateError = targetRate > 0 && Math.abs(currentRate - targetRate) / targetRate >= (rateThreshold / 100)
+
+    if (s.manualError || isRateError) return 'red'
+
+    const remaining = parseFloat(s.volumeRemaining ?? s.volumeInitial ?? 0)
+    if (remaining <= warnThreshold && remaining > 0) return 'orange'
+
     return 'green'
-  }, [warnThreshold])
+  }, [rateThreshold, warnThreshold])
 
   // ── Fetch from backend ───────────────────────────────────────────
   const fetchSessions = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/sessions`)
-      // Enrich with status
       setSessions(res.data.map(s => ({ ...s, status: getStatus(s) })))
       setError(null)
     } catch {
@@ -73,7 +79,6 @@ export function AppProvider({ children }) {
   }
 
   const reportError = async (session) => {
-    // Mark as manual error locally + add to notifications
     setSessions(prev =>
       prev.map(s => s.id === session.id ? { ...s, manualError: true, status: 'red' } : s)
     )
@@ -91,10 +96,9 @@ export function AppProvider({ children }) {
       },
       ...prev,
     ])
-    // Persist to backend
     try {
       await axios.patch(`${API}/sessions/${session.id}/error`)
-    } catch { /* offline fallback already done */ }
+    } catch { /* ignore */ }
   }
 
   // ── Derived stats ────────────────────────────────────────────────
@@ -105,22 +109,16 @@ export function AppProvider({ children }) {
     waiting: sessions.filter(s => s.status === 'gray').length,
   }
 
-  // Sessions nearly empty (for notifications page)
-  const nearlyEmpty = sessions.filter(s => {
-    const remaining = s.volumeRemaining ?? s.volumeInitial
-    const rate = s.dropRate ?? 60
-    const minutesLeft = rate > 0 ? (remaining / rate) * 60 : 999
-    return minutesLeft < warnThreshold && s.status !== 'red'
-  })
-
-  // Maintenance sessions
-  const maintenance = notifications.filter(n => n.type === 'maintenance')
+  const nearlyEmpty = sessions.filter(s => s.status === 'orange')
+  const errorSessions = sessions.filter(s => s.status === 'red')
 
   return (
     <AppContext.Provider value={{
       sessions, stats, devices, loading, error, autoRefresh,
       warnThreshold, rateThreshold,
-      nearlyEmpty, maintenance, notifications,
+      nearlyEmpty, 
+      maintenance: errorSessions, 
+      notifications,
       setAutoRefresh, setWarnThreshold, setRateThreshold,
       createSession, endSession, reportError, fetchSessions,
     }}>
