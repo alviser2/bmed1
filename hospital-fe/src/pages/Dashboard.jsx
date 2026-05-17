@@ -37,12 +37,12 @@ export default function Dashboard() {
 
       {/* Stat cards */}
       <div className="stat-grid">
-        <div className="stat-card red">
+        <div className="stat-card gray">
           <div>
-            <div className="num">{loading ? '...' : stats.error}</div>
-            <div className="lbl">Tổng thiết bị lỗi</div>
+            <div className="num">{loading ? '...' : stats.waiting}</div>
+            <div className="lbl">Đang chờ phân công</div>
           </div>
-          <div className="icon-box"><IconX /></div>
+          <div className="icon-box"><IconWarn /></div>
         </div>
         <div className="stat-card green">
           <div>
@@ -58,12 +58,12 @@ export default function Dashboard() {
           </div>
           <div className="icon-box"><IconClock /></div>
         </div>
-        <div className="stat-card gray">
+        <div className="stat-card red">
           <div>
-            <div className="num">{loading ? '...' : stats.waiting}</div>
-            <div className="lbl">Đang chờ gán</div>
+            <div className="num">{loading ? '...' : stats.error}</div>
+            <div className="lbl">Tốc độ bất thường</div>
           </div>
-          <div className="icon-box"><IconWarn /></div>
+          <div className="icon-box"><IconX /></div>
         </div>
       </div>
 

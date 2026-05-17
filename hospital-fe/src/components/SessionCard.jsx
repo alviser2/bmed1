@@ -1,99 +1,130 @@
-import { useNavigate } from 'react-router-dom'
+import React from 'react'
 import { useApp } from '../context/AppContext'
+import { useNavigate } from 'react-router-dom' // Dùng để điều hướng màn hình
 
 const IconPulse = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-  </svg>
-)
-const IconDrop = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"/>
-  </svg>
-)
-const IconClock = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-  </svg>
-)
-const IconAlert = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-    <line x1="12" y1="9" x2="12" y2="13"/>
-    <line x1="12" y1="17" x2="12.01" y2="17"/>
-  </svg>
-)
-const IconCheck = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="20 6 9 17 4 12"/>
   </svg>
 )
 
 export default function SessionCard({ session }) {
-  const { endSession, reportError } = useApp()
-  const navigate = useNavigate()
+  const { handleAlertAction } = useApp()
+  const navigate = useNavigate() // Khởi tạo trình điều hướng
 
-  const remaining = session.volumeRemaining ?? session.volumeInitial ?? 0
-  const rate      = session.dropRate ?? 60
-  const minutesLeft = rate > 0 ? Math.round((remaining / rate) * 60) : null
+  // Đồng bộ 100% với các trường SELECT trong server.js của bạn
+  const idPhien = session.id;
+  const idThietBi = session.deviceId; 
+  const tenBenhNhan = session.patientName || "Chưa có tên";
+  const phong = session.room || "---";
+  const giuong = session.bed || "---";
+  const tocDoHienTai = session.dropRate ?? 0;
+  const tocDoYLenh = session.prescribedDropRate ?? 40;
+  const theTichConLai = session.volumeRemaining ?? session.volumeInitial ?? 0;
 
-  const handleError = async () => {
-    await reportError(session)
-    navigate('/thong-bao')
+  // Thuật toán kiểm tra trạng thái hiển thị màu sắc tức thời tại Frontend
+  const currentRate = parseFloat(tocDoHienTai)
+  const targetRate = parseFloat(tocDoYLenh)
+  const phanTramLech = targetRate > 0 ? (Math.abs(currentRate - targetRate) / targetRate) * 100 : 0
+  
+  // Khớp với chữ 'urgent' và 'warning' trong cơ sở dữ liệu của server.js
+  const isLoiTocDo = phanTramLech >= 15 || session.status === 'urgent';
+  const isSapHetDich = (theTichConLai <= 20 && theTichConLai > 0) || session.status === 'warning';
+
+  let cardStyle = { borderColor: '#10b981', backgroundColor: '#f0fdf4' }; // Mặc định: Xanh
+  let statusText = "✓ Đang truyền bình thường";
+  let statusColor = "#10b981";
+
+  if (isLoiTocDo) {
+    cardStyle = { borderColor: '#ef4444', backgroundColor: '#fef2f2' }; // Lỗi tốc độ: Đỏ
+    statusText = "⚠️ Tốc độ bất thường — cần kiểm tra ngay!";
+    statusColor = "#dc2626";
+  } else if (isSapHetDich) {
+    cardStyle = { borderColor: '#f97316', backgroundColor: '#fff7ed' }; // Sắp hết: Cam
+    statusText = "⏳ Cảnh báo: Dịch truyền sắp hết!";
+    statusColor = "#ea580c";
   }
 
-  const handleEnd = () => endSession(session.id)
-
-  const statusColors = {
-    green:  'status-green',
-    orange: 'status-orange',
-    red:    'status-red',
-    gray:   'status-gray',
-  }
+  const triggerAction = async (e, actionType) => {
+    e.stopPropagation(); // Ngăn chặn sự kiện bấm thẻ lan ra ngoài (không bị nhảy màn hình khi ấn nút)
+    await handleAlertAction({
+      session_id: idPhien,
+      action: actionType,
+      device_id: idThietBi
+    });
+  };
 
   return (
-    <div className={`session-card ${statusColors[session.status] ?? 'status-gray'}`}>
-      {/* Header */}
-      <div className="card-header">
-        <div>
-          <div className="card-name">{session.patientName}</div>
-          <div className="card-room">Phòng {session.room} - Giường {session.bed}</div>
-        </div>
-        <span className="card-pulse" style={{ color: session.status === 'green' ? 'var(--green)' : session.status === 'orange' ? 'var(--orange)' : session.status === 'red' ? 'var(--red)' : 'var(--gray)' }}>
-          <IconPulse />
+    <div 
+      onClick={() => navigate('/benh-nhan')} // CLICK VÀO THẺ: Nhảy sang trang chi tiết biểu đồ
+      style={{
+        border: '2px solid',
+        borderRadius: '12px',
+        padding: '16px',
+        background: cardStyle.backgroundColor,
+        borderColor: cardStyle.borderColor,
+        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.05)',
+        cursor: 'pointer',
+        position: 'relative'
+      }}
+    >
+      <div style={{ position: 'absolute', top: '16px', right: '16px', color: cardStyle.borderColor }}>
+        <IconPulse />
+      </div>
+
+      <div style={{ marginBottom: '4px' }}>
+        <span style={{ fontSize: '18px', fontWeight: '700', color: '#1e293b' }}>
+          {tenBenhNhan}
         </span>
       </div>
-
-      {/* Body */}
-      <div className="card-body">
-        <div className="card-row">
-          <span className="k"><IconDrop /> {session.fluidType || 'Chưa chọn'}</span>
-        </div>
-        <div className="card-row">
-          <span className="k">Tốc độ:</span>
-          <span className={`v ${session.status === 'green' ? 'green' : session.status === 'orange' ? 'orange' : ''}`}>
-            {session.dropRate ?? '—'} giọt/phút
-          </span>
-        </div>
-        <div className="card-row">
-          <span className="k">Còn lại:</span>
-          <span className="v">{remaining} ml</span>
-        </div>
-        {minutesLeft !== null && (
-          <div className="card-row">
-            <span className="k"><IconClock /> ~{minutesLeft} phút</span>
-          </div>
-        )}
+      <div style={{ fontSize: '13px', color: '#64748b', marginBottom: '12px' }}>
+        Phòng {phong} - Giường {giuong}
       </div>
 
-      {/* Actions */}
-      <div className="card-actions">
-        <button className="btn btn-danger" onClick={handleError}>
-          <IconAlert /> Lỗi thiết bị
+      <div style={{ fontSize: '13px', fontWeight: '600', color: statusColor, marginBottom: '16px' }}>
+        {statusText}
+      </div>
+
+      <div style={{ display: 'flex', gap: '4px', flexDirection: 'column', fontSize: '14px', color: '#334155', borderTop: '1px solid rgba(0,0,0,0.05)', paddingTop: '12px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Tốc độ hiện tại:</span>
+          <strong style={{ color: isLoiTocDo ? '#dc2626' : '#0f172a' }}>{tocDoHienTai} giọt/phút</strong>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Y lệnh:</span>
+          <span>{tocDoYLenh} giọt/phút</span>
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+          <span>Còn lại:</span>
+          <strong style={{ color: isSapHetDich ? '#ea580c' : '#0f172a' }}>{theTichConLai} ml</strong>
+        </div>
+      </div>
+
+      {/* KHỐI NÚT BẤM ĐIỀU KHIỂN LÂM SÀNG */}
+      <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+        <button 
+          onClick={(e) => triggerAction(e, 'Loi_Thiet_Bi')}
+          style={{ flex: 1, padding: '10px 12px', backgroundColor: '#fff', border: '1px solid #ef4444', color: '#ef4444', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
+        >
+          ⚠️ Lỗi thiết bị
         </button>
-        <button className="btn btn-neutral" onClick={handleEnd}>
-          <IconCheck /> Kết thúc
-        </button>
+
+        {isLoiTocDo ? (
+          <button 
+            onClick={(e) => triggerAction(e, 'Da_Xu_Ly_Toc_Do')}
+            style={{ flex: 1, padding: '10px 12px', backgroundColor: '#10b981', border: 'none', color: '#fff', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: 'pointer' }}
+          >
+            ✓ Đã xử lý
+          </button>
+        ) : (
+          <button 
+            onClick={(e) => triggerAction(e, 'Ket_Thuc_Phien')}
+            disabled={!isSapHetDich}
+            style={{ flex: 1, padding: '10px 12px', backgroundColor: isSapHetDich ? '#3b82f6' : '#e2e8f0', border: 'none', color: isSapHetDich ? '#fff' : '#94a3b8', borderRadius: '8px', fontSize: '13px', fontWeight: '600', cursor: isSapHetDich ? 'pointer' : 'not-allowed' }}
+          >
+            ✓ Kết thúc
+          </button>
+        )}
       </div>
     </div>
   )

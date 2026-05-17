@@ -419,3 +419,24 @@ tr:hover td { background: #FAFAFA; }
 }
 .back-btn:hover { color: var(--text-primary); }
 .section-hdr { font-size: 17px; font-weight: 700; margin-bottom: 20px; }
+
+/* ── Card flash animation ─────────────────────────────── */
+@keyframes cardFlash {
+  0%, 100% { border-color: var(--red); box-shadow: 0 0 0 0 rgba(220,38,38,0.3); }
+  50%       { border-color: #FCA5A5; box-shadow: 0 0 0 4px rgba(220,38,38,0.15); }
+}
+
+/* ── Notification styles ─────────────────────────────── */
+.notif-section { margin-bottom: 28px; }
+.notif-section-title {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 15px; font-weight: 700; margin-bottom: 12px;
+}
+.empty-state {
+  padding: 24px; text-align: center; color: var(--text-secondary);
+  background: #fff; border-radius: var(--radius); border: 1px dashed #E5E7EB; font-size: 14px;
+}
+
+/* ── Extra color utils ───────────────────────────────── */
+.detail-row .v.red    { color: var(--red); }
+.detail-row .v.orange { color: var(--orange, #EA580C); }
