@@ -5,6 +5,7 @@
 
 const express = require('express');
 const cors    = require('cors');
+const crypto  = require('crypto'); // built-in Node, không cần cài
 require('dotenv').config();
 
 const app = express();
@@ -17,7 +18,7 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// ── Pool MySQL2 (khai báo thẳng, không qua config/pool.js) ──
+// ── Pool MySQL2 ──────────────────────────────────────────────
 const mysql = require('mysql2/promise');
 
 const pool = mysql.createPool({
@@ -31,20 +32,188 @@ const pool = mysql.createPool({
   timezone:           '+07:00',
 });
 
-// Kiểm tra kết nối ngay khi khởi động
 pool.getConnection()
   .then(c => { console.log('[DB] Ket noi MySQL thanh cong!'); c.release(); })
   .catch(e => { console.error('[DB] Loi ket noi MySQL:', e.message); process.exit(1); });
 
-// ── Routes ESP32 (giữ nguyên — DeviceController dùng Sequelize riêng) ──
+// ── Token store đơn giản (in-memory) ────────────────────────
+// Key: token string  →  Value: { userId, role, name, email }
+const tokenStore = new Map();
+
+function generateToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Middleware xác thực
+function requireAuth(req, res, next) {
+  const auth = req.headers['authorization'] || '';
+  const token = auth.replace('Bearer ', '').trim();
+  if (!token || !tokenStore.has(token)) {
+    return res.status(401).json({ error: 'Chưa đăng nhập hoặc phiên hết hạn.' });
+  }
+  req.user = tokenStore.get(token);
+  next();
+}
+
+// Middleware chỉ cho kỹ thuật viên
+function requireTechnician(req, res, next) {
+  if (req.user?.role !== 'technician') {
+    return res.status(403).json({ error: 'Chỉ kỹ thuật viên mới có quyền này.' });
+  }
+  next();
+}
+
+// ── Routes ESP32 ─────────────────────────────────────────────
 const deviceRoutes = require('./routes/deviceRoutes');
 app.use('/', deviceRoutes);
 
 // ── Health check ─────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
-// ── GET /api/sessions ────────────────────────────────────────
-app.get('/api/sessions', async (req, res) => {
+// ============================================================
+// AUTH
+// ============================================================
+
+// POST /api/auth/login
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Thiếu email hoặc mật khẩu.' });
+    }
+
+    // Mật khẩu lưu plain text trong DB (đơn giản cho dự án nhỏ)
+    const [[user]] = await pool.query(
+      `SELECT id, name, email, role FROM users
+       WHERE email = ? AND password_hash = ? LIMIT 1`,
+      [email, password]
+    );
+
+    if (!user) {
+      return res.status(401).json({ error: 'Email hoặc mật khẩu không đúng.' });
+    }
+
+    const token = generateToken();
+    tokenStore.set(token, { userId: user.id, role: user.role, name: user.name, email: user.email });
+
+    res.json({
+      token,
+      user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    });
+  } catch (err) {
+    console.error('[POST /api/auth/login]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/auth/logout
+app.post('/api/auth/logout', requireAuth, (req, res) => {
+  const token = req.headers['authorization'].replace('Bearer ', '').trim();
+  tokenStore.delete(token);
+  res.json({ success: true });
+});
+
+// GET /api/auth/me  — kiểm tra token còn hợp lệ không
+app.get('/api/auth/me', requireAuth, (req, res) => {
+  res.json({ user: req.user });
+});
+
+// ============================================================
+// DEVICES — dành cho kỹ thuật viên
+// ============================================================
+
+// GET /api/devices — lấy danh sách thiết bị (cả bác sĩ lẫn KTV đều dùng)
+app.get('/api/devices', requireAuth, async (req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, mac_address, label, location_room, location_bed, status, created_at
+       FROM infusion_devices
+       ORDER BY created_at DESC`
+    );
+    res.json(rows.map(d => ({
+      id:           d.id,
+      macAddress:   d.mac_address,
+      label:        d.label || d.mac_address,
+      locationRoom: d.location_room,
+      locationBed:  d.location_bed,
+      status:       d.status,      // 'available' | 'active' | 'error' | 'unassigned'
+      createdAt:    d.created_at,
+    })));
+  } catch (err) {
+    console.error('[GET /api/devices]', err.message);
+    res.json([]);
+  }
+});
+
+// POST /api/devices — KTV thêm thiết bị mới
+app.post('/api/devices', requireAuth, requireTechnician, async (req, res) => {
+  try {
+    const { macAddress, label } = req.body;
+    if (!macAddress) {
+      return res.status(400).json({ error: 'Thiếu macAddress.' });
+    }
+
+    // Kiểm tra trùng
+    const [[existing]] = await pool.query(
+      `SELECT id FROM infusion_devices WHERE mac_address = ? LIMIT 1`,
+      [macAddress]
+    );
+    if (existing) {
+      return res.status(409).json({ error: 'MAC address đã tồn tại trong hệ thống.' });
+    }
+
+    await pool.query(
+      `INSERT INTO infusion_devices (mac_address, label, status, registered_by)
+       VALUES (?, ?, 'available', ?)`,
+      [macAddress, label || null, req.user.userId]
+    );
+
+    const [[newDevice]] = await pool.query(
+      `SELECT id, mac_address, label, location_room, location_bed, status, created_at
+       FROM infusion_devices WHERE mac_address = ? LIMIT 1`,
+      [macAddress]
+    );
+
+    res.status(201).json({
+      id:           newDevice.id,
+      macAddress:   newDevice.mac_address,
+      label:        newDevice.label || newDevice.mac_address,
+      locationRoom: newDevice.location_room,
+      locationBed:  newDevice.location_bed,
+      status:       newDevice.status,
+      createdAt:    newDevice.created_at,
+    });
+  } catch (err) {
+    console.error('[POST /api/devices]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/devices/:id — KTV xoá thiết bị (chỉ khi không đang active)
+app.delete('/api/devices/:id', requireAuth, requireTechnician, async (req, res) => {
+  try {
+    const [[device]] = await pool.query(
+      `SELECT id, status FROM infusion_devices WHERE id = ? LIMIT 1`,
+      [req.params.id]
+    );
+    if (!device) return res.status(404).json({ error: 'Không tìm thấy thiết bị.' });
+    if (device.status === 'active') {
+      return res.status(409).json({ error: 'Không thể xoá thiết bị đang có phiên truyền.' });
+    }
+    await pool.query(`DELETE FROM infusion_devices WHERE id = ?`, [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DELETE /api/devices]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// SESSIONS
+// ============================================================
+
+// GET /api/sessions
+app.get('/api/sessions', requireAuth, async (req, res) => {
   try {
     const [rows] = await pool.query(`
       SELECT
@@ -95,8 +264,8 @@ app.get('/api/sessions', async (req, res) => {
   }
 });
 
-// ── GET /api/sessions/:id/metrics ────────────────────────────
-app.get('/api/sessions/:id/metrics', async (req, res) => {
+// GET /api/sessions/:id/metrics
+app.get('/api/sessions/:id/metrics', requireAuth, async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT current_drop_rate, current_weight, remaining_time, recorded_at
@@ -112,18 +281,17 @@ app.get('/api/sessions/:id/metrics', async (req, res) => {
   }
 });
 
-// ── POST /api/sessions ───────────────────────────────────────
-app.post('/api/sessions', async (req, res) => {
+// POST /api/sessions
+app.post('/api/sessions', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
-    const { patientName, room, bed, condition,
-            deviceId, fluidType, volumeInitial, dropRate, doctor } = req.body;
+    const { patientName, room, bed, deviceId, fluidType, volumeInitial, dropRate } = req.body;
 
     if (!patientName || !deviceId || !volumeInitial) {
       await conn.rollback();
-      return res.status(400).json({ error: 'Thieu: patientName, deviceId, volumeInitial' });
+      return res.status(400).json({ error: 'Thiếu: patientName, deviceId, volumeInitial' });
     }
 
     // 1. Tìm hoặc tạo bệnh nhân
@@ -141,8 +309,7 @@ app.post('/api/sessions', async (req, res) => {
         [patientName, room ?? null, bed ?? null]
       );
       const [[np]] = await conn.query(
-        `SELECT id FROM patient_profiles
-         WHERE full_name=? ORDER BY created_at DESC LIMIT 1`,
+        `SELECT id FROM patient_profiles WHERE full_name=? ORDER BY created_at DESC LIMIT 1`,
         [patientName]
       );
       patientId = np.id;
@@ -155,11 +322,11 @@ app.post('/api/sessions', async (req, res) => {
     );
     if (!device) {
       await conn.rollback();
-      return res.status(404).json({ error: `Khong tim thay thiet bi: ${deviceId}` });
+      return res.status(404).json({ error: `Không tìm thấy thiết bị: ${deviceId}` });
     }
     if (device.status === 'active') {
       await conn.rollback();
-      return res.status(409).json({ error: 'Thiet bi dang co phien truyen khac.' });
+      return res.status(409).json({ error: 'Thiết bị đang có phiên truyền khác.' });
     }
 
     // 3. Tìm loại dịch
@@ -172,13 +339,8 @@ app.post('/api/sessions', async (req, res) => {
       if (fts.length > 0) fluidTypeId = fts[0].id;
     }
 
-    // 4. Lấy staff
-    const [staffRows] = await conn.query('SELECT id FROM users LIMIT 1');
-    if (staffRows.length === 0) {
-      await conn.rollback();
-      return res.status(500).json({ error: 'Bang users trong. Can INSERT 1 user truoc.' });
-    }
-    const staffId = staffRows[0].id;
+    // 4. Dùng staff_id từ token đăng nhập
+    const staffId = req.user.userId;
 
     // 5. Tạo phiên
     await conn.query(
@@ -226,14 +388,14 @@ app.post('/api/sessions', async (req, res) => {
   }
 });
 
-// ── PATCH /api/sessions/:id/end ──────────────────────────────
-app.patch('/api/sessions/:id/end', async (req, res) => {
+// PATCH /api/sessions/:id/end
+app.patch('/api/sessions/:id/end', requireAuth, async (req, res) => {
   try {
     const [[s]] = await pool.query(
       'SELECT device_id FROM infusion_sessions WHERE id=?',
       [req.params.id]
     );
-    if (!s) return res.status(404).json({ error: 'Khong tim thay phien' });
+    if (!s) return res.status(404).json({ error: 'Không tìm thấy phiên' });
 
     await pool.query(
       `UPDATE infusion_sessions SET status='completed', end_at=NOW() WHERE id=?`,
@@ -250,11 +412,10 @@ app.patch('/api/sessions/:id/end', async (req, res) => {
   }
 });
 
-// ── PATCH /api/sessions/:id/error ────────────────────────────
-app.patch('/api/sessions/:id/error', async (req, res) => {
+// PATCH /api/sessions/:id/error
+app.patch('/api/sessions/:id/error', requireAuth, async (req, res) => {
   try {
-    const [staffRows] = await pool.query('SELECT id FROM users LIMIT 1');
-    const staffId = staffRows[0]?.id ?? null;
+    const staffId = req.user.userId;
 
     await pool.query(
       `INSERT INTO infusion_issues
@@ -273,27 +434,8 @@ app.patch('/api/sessions/:id/error', async (req, res) => {
   }
 });
 
-// ── GET /api/devices ─────────────────────────────────────────
-app.get('/api/devices', async (req, res) => {
-  try {
-    const [rows] = await pool.query(
-      `SELECT mac_address, location_room, location_bed, status
-       FROM infusion_devices
-       ORDER BY location_room, location_bed`
-    );
-    res.json(rows.map(d => ({
-      id:     d.mac_address,
-      name:   `${d.mac_address} — Phong ${d.location_room ?? '?'} Giuong ${d.location_bed ?? '?'}`,
-      status: d.status,
-    })));
-  } catch (err) {
-    console.error('[GET /api/devices]', err.message);
-    res.json([]);
-  }
-});
-
-// ── GET /api/alerts ──────────────────────────────────────────
-app.get('/api/alerts', async (req, res) => {
+// GET /api/alerts
+app.get('/api/alerts', requireAuth, async (req, res) => {
   try {
     const [rows] = await pool.query(
       `SELECT a.id, a.alert_type, a.message, a.is_read, a.triggered_at,

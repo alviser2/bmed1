@@ -1,45 +1,104 @@
-// File: esp32_simulator.js
+// ============================================================
+// esp32_simulator.js — Giả lập NHIỀU ESP32 cùng lúc
+// ============================================================
+// Cách dùng:
+//   node esp32_simulator.js                → tự động lấy tất cả session đang active
+//   node esp32_simulator.js <session_id>   → chạy 1 session cụ thể
+//
+// Mỗi ESP32 ảo sẽ gửi data độc lập mỗi 3 giây.
+// ============================================================
 
-const API_URL = "http://localhost:8000/api/du-lieu-esp";
-const SESSION_ID = "3a5198d7-46df-11f1-8d28-6018953db4d6"; // Copy 1 cái session_id thật từ Database dán vào đây
+const API_URL  = 'http://localhost:8000/api';
+const INTERVAL = 3000; // ms
 
-// Giả lập thông số ban đầu của bình truyền dịch
-let current_weight = 500; // Bắt đầu với bình dịch 500 gram
+// ── Giả lập 1 thiết bị ──────────────────────────────────────
+function simulateDevice(sessionId, initialWeight = 500) {
+  let weight = initialWeight;
 
-console.log("🚀 Bắt đầu khởi động Mạch ESP32 Giả lập...");
-console.log(`Đang bắn dữ liệu liên tục lên: ${API_URL}`);
+  console.log(`[ESP-${sessionId.slice(0,8)}] Bắt đầu giả lập, trọng lượng ban đầu: ${weight}g`);
 
-// Hàm setInterval sẽ lặp đi lặp lại việc gửi data mỗi 3 giây
-setInterval(async () => {
-    // 1. Giả lập nhiễu cảm biến: Tốc độ nhỏ giọt dao động ngẫu nhiên từ 35 đến 65 giọt/phút
-    const current_drop_rate = Math.floor(Math.random() * (65 - 35 + 1)) + 35;
+  const timer = setInterval(async () => {
+    // Giả lập nhiễu tốc độ nhỏ giọt: 35–65 giọt/phút
+    const dropRate = Math.floor(Math.random() * 31) + 35;
 
-    // 2. Giả lập khối lượng dịch đang vơi dần đi (mỗi 3s giảm khoảng 1-2 gram)
-    current_weight -= (Math.random() * 2);
-    if (current_weight < 30) current_weight = 30; // Chạm đáy 30g là vỏ bình
+    // Dịch vơi dần 1–2g mỗi 3 giây
+    weight -= (Math.random() * 2 + 1);
+    if (weight < 30) weight = 30; // đáy bình
 
-    // 3. Đóng gói JSON chuẩn như đã giao kèo
     const payload = {
-        session_id: SESSION_ID,
-        current_drop_rate: current_drop_rate,
-        current_weight: parseFloat(current_weight.toFixed(2)) // Làm tròn 2 chữ số thập phân
+      session_id:        sessionId,
+      current_drop_rate: dropRate,
+      current_weight:    parseFloat(weight.toFixed(2)),
     };
 
     try {
-        // 4. Bắn API lên Server chính
-        const response = await fetch(API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        
-        const result = await response.json();
-        
-        // In ra màn hình để theo dõi
-        console.log(`[${new Date().toLocaleTimeString()}] ESP Ảo gửi: ${payload.current_weight}g | ${payload.current_drop_rate} giọt/p -> Server báo thời gian còn: ${result.calculated_time} phút`);
-        
-    } catch (error) {
-        console.error("❌ ESP Ảo không tìm thấy Server! Hãy chắc chắn Server cổng 8000 đang bật.");
+      const res = await fetch(`${API_URL}/du-lieu-esp`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+      });
+      const data = await res.json();
+      console.log(
+        `[ESP-${sessionId.slice(0,8)}] ${payload.current_weight}g | ` +
+        `${payload.current_drop_rate} g/p | còn ~${data.calculated_time ?? '?'} phút`
+      );
+    } catch {
+      console.error(`[ESP-${sessionId.slice(0,8)}] ❌ Không kết nối được server!`);
+    }
+  }, INTERVAL);
+
+  return timer;
+}
+
+// ── Tự động lấy các session đang chạy ────────────────────────
+async function fetchActiveSessions() {
+  try {
+    const res  = await fetch(`${API_URL}/sessions`);
+    const data = await res.json();
+    // Lọc session còn active (không phải completed)
+    return data.filter(s => s.status !== 'completed' && s.status !== 'urgent');
+  } catch {
+    console.error('❌ Không lấy được session từ server.');
+    return [];
+  }
+}
+
+// ── Main ─────────────────────────────────────────────────────
+async function main() {
+  console.log('🚀 ESP32 Multi-Simulator khởi động...\n');
+
+  const argSessionId = process.argv[2]; // node esp32_simulator.js <id>
+
+  if (argSessionId) {
+    // Chạy 1 session được chỉ định thủ công
+    console.log(`Chế độ: 1 session cụ thể\n`);
+    simulateDevice(argSessionId, 500);
+  } else {
+    // Tự động detect tất cả session đang active
+    console.log('Chế độ: tự động theo tất cả session đang hoạt động\n');
+
+    const sessions = await fetchActiveSessions();
+
+    if (sessions.length === 0) {
+      console.log('⚠️  Không có session nào đang chạy.');
+      console.log('   Hãy tạo phiên truyền trên web rồi chạy lại simulator này.');
+      console.log('   Hoặc chạy: node esp32_simulator.js <session_id>\n');
+      return;
     }
 
-}, 3000); // 3000 ms = 3 giây gửi 1 lần
+    console.log(`Tìm thấy ${sessions.length} session đang chạy:\n`);
+    sessions.forEach((s, i) => {
+      console.log(`  ${i+1}. ${s.patientName} — Phòng ${s.room} Giường ${s.bed} | ID: ${s.id}`);
+    });
+    console.log('');
+
+    // Chạy tất cả cùng lúc, offset nhỏ để không gửi đúng 1 lúc
+    sessions.forEach((s, i) => {
+      setTimeout(() => {
+        simulateDevice(s.id, s.volumeInitial || 500);
+      }, i * 500); // cách nhau 0.5s để dễ đọc log
+    });
+  }
+}
+
+main();
