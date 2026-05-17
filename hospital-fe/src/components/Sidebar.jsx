@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
-import { useApp } from '../context/AppContext'
+import { useApp }  from '../context/AppContext'
+import { useAuth } from '../context/AuthContext'
 
 const IconHome = () => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -30,9 +31,17 @@ const IconPulse = () => (
     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
   </svg>
 )
+const IconLogout = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="16" height="16">
+    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+    <polyline points="16 17 21 12 16 7"/>
+    <line x1="21" y1="12" x2="9" y2="12"/>
+  </svg>
+)
 
 export default function Sidebar() {
   const { notifications } = useApp()
+  const { user, logout }  = useAuth()
   const newAlerts = notifications.length
 
   return (
@@ -75,6 +84,33 @@ export default function Sidebar() {
           </NavLink>
         ))}
       </nav>
+
+      {/* User info + logout */}
+      <div style={{
+        marginTop: 'auto',
+        borderTop: '1px solid rgba(255,255,255,0.1)',
+        padding: '14px 16px',
+      }}>
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginBottom: 2 }}>
+          Đang đăng nhập
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 500, color: '#fff', marginBottom: 10 }}>
+          {user?.name || ''}
+        </div>
+        <button
+          onClick={logout}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            width: '100%', padding: '7px 10px',
+            background: 'rgba(255,255,255,0.08)',
+            border: '1px solid rgba(255,255,255,0.15)',
+            borderRadius: 8, cursor: 'pointer',
+            color: 'rgba(255,255,255,0.8)', fontSize: 13,
+          }}
+        >
+          <IconLogout /> Đăng xuất
+        </button>
+      </div>
 
       <div className="sidebar-footer">Version 1.0.0</div>
     </aside>
