@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 import { useAuth } from '../context/AuthContext'
 
-const API = 'http://localhost:8000/api'
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API = `${BASE_URL.replace(/\/$/, '')}/api`
 
 const STATUS_LABEL = {
   available:  { text: 'Sẵn sàng',        color: '#16a34a', bg: '#dcfce7' },
